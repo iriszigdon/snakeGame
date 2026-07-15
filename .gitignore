@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Local runtime data. The server creates this file for registered users.
+snake_network/data/users.json
+
+# IDE and OS noise
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
