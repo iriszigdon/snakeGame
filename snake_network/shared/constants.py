@@ -9,6 +9,9 @@ CELL_SIZE = 20
 TICK_RATE = 5
 FRUIT_COUNT = 6
 MIN_PLAYERS_TO_START = 1
+DEFAULT_OBSTACLE_COUNT = 18
+DEFAULT_BOT_COUNT = 0
+COUNTDOWN_TICKS = TICK_RATE * 3
 
 SHOOT_SCORE = 5
 SHOT_COOLDOWN_TICKS = 8
@@ -30,9 +33,11 @@ COLORS = [
 ]
 
 FRUIT_TYPES = [
-    {"kind": "apple", "color": "#EF4444"},
-    {"kind": "orange", "color": "#F97316"},
-    {"kind": "grape", "color": "#8B5CF6"},
-    {"kind": "lemon", "color": "#FACC15"},
-    {"kind": "melon", "color": "#22C55E"},
+    {"kind": "apple", "color": "#EF4444", "value": 1, "effect": "normal"},
+    {"kind": "orange", "color": "#F97316", "value": 1, "effect": "normal"},
+    {"kind": "grape", "color": "#8B5CF6", "value": 1, "effect": "normal"},
+    {"kind": "lemon", "color": "#FACC15", "value": 2, "effect": "bonus"},
+    {"kind": "melon", "color": "#22C55E", "value": 2, "effect": "bonus"},
+    {"kind": "gold", "color": "#FDE047", "value": 3, "effect": "bonus"},
+    {"kind": "blaster", "color": "#38BDF8", "value": 1, "effect": "unlock_shooting"},
 ]

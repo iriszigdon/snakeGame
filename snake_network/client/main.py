@@ -8,7 +8,12 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
 
-from snake_network.shared.constants import CELL_SIZE, DEFAULT_SERVER_HOST, PORT
+try:
+    import winsound
+except ImportError:
+    winsound = None
+
+from snake_network.shared.constants import CELL_SIZE, COLORS, DEFAULT_SERVER_HOST, PORT
 from snake_network.shared.crypto import CryptoBox, build_shared_key, generate_private_key, public_key
 from snake_network.shared.protocol import receive_packet, send_packet
 
@@ -77,6 +82,10 @@ class SnakeClientApp:
         self.in_game = False
         self.username = ""
         self.current_state: Optional[dict[str, object]] = None
+        self.selected_color = COLORS[0]
+        self.last_score = 0
+        self.last_alive = True
+        self.last_winner = None
 
         self.style = ttk.Style()
         self.style.theme_use("clam")
@@ -152,6 +161,11 @@ class SnakeClientApp:
         top = ttk.Frame(self.container, style="Panel.TFrame")
         top.pack(fill="x", pady=(0, 16))
         ttk.Label(top, text=f"Lobby - {self.username}", style="Title.TLabel").pack(side="left")
+        ttk.Button(top, text="Help", command=self._show_help).pack(side="right", padx=4)
+        ttk.Button(top, text="Scores", command=lambda: self.network.send({"type": "stats"})).pack(side="right", padx=4)
+        if self.username.lower() == "admin":
+            ttk.Button(top, text="Delete Room", command=self._delete_selected_room).pack(side="right", padx=4)
+        ttk.Button(top, text="Snake Color", command=self._choose_color).pack(side="right", padx=4)
         ttk.Button(top, text="Refresh", command=lambda: self.network.send({"type": "list_rooms"})).pack(side="right", padx=4)
         ttk.Button(top, text="Create Room", command=self._create_room).pack(side="right", padx=4)
 
@@ -168,7 +182,11 @@ class SnakeClientApp:
         self.room_ids: list[str] = []
         for room in rooms:
             self.room_ids.append(str(room["id"]))
-            line = f'{room["id"]} | {room["name"]:<24} | players: {room["players"]} | winner: {room.get("winner") or "-"}'
+            line = (
+                f'{room["id"]} | {room["name"]:<18} | players: {room["players"]} '
+                f'| bots: {room.get("bots", 0)} | obstacles: {room.get("obstacles", 0)} '
+                f'| winner: {room.get("winner") or "-"}'
+            )
             self.rooms_list.insert(tk.END, line)
 
         ttk.Button(self.container, text="Join Selected Room", command=self._join_selected_room).pack(pady=14)
@@ -176,14 +194,57 @@ class SnakeClientApp:
     def _create_room(self) -> None:
         name = simpledialog.askstring("Create Room", "Room name:", parent=self.root)
         if name:
-            self.network.send({"type": "create_room", "name": name})
+            bot_count = simpledialog.askinteger("Bots", "Number of bots (0-4):", initialvalue=0, minvalue=0, maxvalue=4, parent=self.root)
+            obstacle_count = simpledialog.askinteger(
+                "Obstacles",
+                "Number of obstacles (0-80):",
+                initialvalue=18,
+                minvalue=0,
+                maxvalue=80,
+                parent=self.root,
+            )
+            self.network.send({
+                "type": "create_room",
+                "name": name,
+                "bot_count": bot_count or 0,
+                "obstacle_count": obstacle_count if obstacle_count is not None else 18,
+            })
 
     def _join_selected_room(self) -> None:
         selection = self.rooms_list.curselection()
         if not selection:
             messagebox.showinfo("Join Room", "Select a room first.")
             return
+        self.network.send({"type": "set_color", "color": self.selected_color})
         self.network.send({"type": "join_room", "room_id": self.room_ids[selection[0]]})
+
+    def _delete_selected_room(self) -> None:
+        selection = self.rooms_list.curselection()
+        if selection:
+            self.network.send({"type": "delete_room", "room_id": self.room_ids[selection[0]]})
+
+    def _choose_color(self) -> None:
+        color = simpledialog.askstring(
+            "Snake Color",
+            "Choose color:\n" + "\n".join(COLORS),
+            initialvalue=self.selected_color,
+            parent=self.root,
+        )
+        if color in COLORS:
+            self.selected_color = color
+            self.network.send({"type": "set_color", "color": color})
+
+    def _show_help(self) -> None:
+        messagebox.showinfo(
+            "Game Help",
+            "Controls:\n"
+            "Arrow keys or WASD - move\n"
+            "Space - shoot after enough points\n"
+            "Ready - starts the countdown\n\n"
+            "Special fruits give bonus points or unlock shooting.\n"
+            "Avoid walls, snakes, bullets and obstacles.\n"
+            "If you are disqualified, you can keep watching or return to the rooms.",
+        )
 
     def _show_game(self) -> None:
         self.in_game = True
@@ -197,6 +258,10 @@ class SnakeClientApp:
             padx=4,
         )
         ttk.Button(top, text="New Game In Room", command=lambda: self.network.send({"type": "restart_room"})).pack(
+            side="right",
+            padx=4,
+        )
+        ttk.Button(top, text="Ready", command=lambda: self.network.send({"type": "ready", "ready": True})).pack(
             side="right",
             padx=4,
         )
@@ -214,8 +279,18 @@ class SnakeClientApp:
         )
         self.canvas.pack(side="left", padx=(0, 16))
 
-        self.score_box = tk.Text(self.container, width=28, height=30, bg="#0F172A", fg="#E5E7EB", font=("Consolas", 12))
-        self.score_box.pack(side="left", fill="y")
+        side_panel = ttk.Frame(self.container, style="Panel.TFrame")
+        side_panel.pack(side="left", fill="y")
+        self.score_box = tk.Text(side_panel, width=32, height=18, bg="#0F172A", fg="#E5E7EB", font=("Consolas", 12))
+        self.score_box.pack(fill="x")
+        self.chat_box = tk.Text(side_panel, width=32, height=10, bg="#111827", fg="#E5E7EB", font=("Segoe UI", 10))
+        self.chat_box.pack(fill="x", pady=(8, 4))
+        chat_row = ttk.Frame(side_panel, style="Panel.TFrame")
+        chat_row.pack(fill="x")
+        self.chat_entry = ttk.Entry(chat_row)
+        self.chat_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(chat_row, text="Send", command=self._send_chat).pack(side="left", padx=4)
+        self.chat_entry.bind("<Return>", lambda event: self._send_chat())
 
         self.root.bind("<Up>", lambda event: self._direction(0, -1))
         self.root.bind("<Down>", lambda event: self._direction(0, 1))
@@ -229,6 +304,12 @@ class SnakeClientApp:
 
     def _direction(self, dx: int, dy: int) -> None:
         self.network.send({"type": "direction", "dx": dx, "dy": dy})
+
+    def _send_chat(self) -> None:
+        text = self.chat_entry.get().strip()
+        if text:
+            self.network.send({"type": "chat", "message": text})
+            self.chat_entry.delete(0, tk.END)
 
     def _process_messages(self) -> None:
         latest_game_state = None
@@ -259,6 +340,10 @@ class SnakeClientApp:
         elif message_type == "game_state":
             self.current_state = message
             self._draw_game(message)
+        elif message_type == "chat_message":
+            self._append_chat(str(message.get("username", "")), str(message.get("message", "")))
+        elif message_type == "stats":
+            self._show_stats(message)
         elif message_type == "error":
             messagebox.showerror("Server Error", str(message.get("message", "")))
         elif message_type == "connection_closed":
@@ -277,11 +362,14 @@ class SnakeClientApp:
         for y in range(height):
             self.canvas.create_line(0, y * CELL_SIZE, width * CELL_SIZE, y * CELL_SIZE, fill="#111827")
 
+        for obstacle in state.get("obstacles", []):
+            self._cell(obstacle, "#64748B", inset=2)
         for fruit in state.get("fruits", []):
             self._draw_fruit(fruit)
         for bullet in state.get("bullets", []):
             self._cell(bullet["position"], "#F8FAFC", oval=True, inset=6)
 
+        winner = state.get("winner")
         score_lines = []
         for player in state.get("players", []):
             color = str(player["color"])
@@ -293,13 +381,25 @@ class SnakeClientApp:
                     self._cell(point, color, inset=1)
             status = "ALIVE" if player["alive"] else f'DEAD ({player["death_reason"]})'
             weapon = " | can shoot" if player["can_shoot"] else ""
-            score_lines.append(f'{player["username"]}: {player["score"]} | {status}{weapon}')
+            ready = " | ready" if player.get("ready") else ""
+            bot = " | bot" if player.get("is_bot") else ""
+            power = f' | {player.get("power_message")}' if player.get("power_message") else ""
+            score_lines.append(
+                f'{player["username"]}: {player["score"]} | level {player.get("level", 1)} | '
+                f'{status}{weapon}{ready}{bot}{power}'
+            )
+            if player["username"] == self.username:
+                self._play_state_sounds(player, winner)
 
-        winner = state.get("winner")
         room = state.get("room", {})
         self.game_title.config(text=f'Room: {room.get("name", "")}')
+        countdown = int(state.get("countdown", -1))
         if winner:
             self.info_label.config(text=f"Winner: {winner}. You can start a new game or go back to the rooms.")
+        elif countdown > 0:
+            self.info_label.config(text=f"Game starts in {max(1, countdown // 5 + 1)}...")
+        elif countdown == -1:
+            self.info_label.config(text="Press Ready when everyone is prepared.")
         else:
             self.info_label.config(text=f"Reach {state.get('shoot_score')} points to unlock shooting. Space = shoot.")
         self.score_box.delete("1.0", tk.END)
@@ -377,6 +477,42 @@ class SnakeClientApp:
 
     def _eye(self, x: int, y: int) -> None:
         self.canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill="#020617", outline="")
+
+    def _append_chat(self, username: str, message: str) -> None:
+        if hasattr(self, "chat_box") and self.chat_box.winfo_exists():
+            self.chat_box.insert(tk.END, f"{username}: {message}\n")
+            self.chat_box.see(tk.END)
+
+    def _show_stats(self, message: dict[str, object]) -> None:
+        lines = ["High Scores:"]
+        for item in message.get("high_scores", []):
+            lines.append(
+                f'{item["username"]}: wins={item["wins"]}, best={item["best_score"]}, games={item["games"]}'
+            )
+        lines.append("\nRecent Matches:")
+        for item in message.get("matches", []):
+            lines.append(f'{item["time"]} | {item["room"]} | winner: {item["winner"]}')
+        messagebox.showinfo("Scores And History", "\n".join(lines) if len(lines) > 2 else "No games recorded yet.")
+
+    def _play_state_sounds(self, player: dict[str, object], winner: object) -> None:
+        score = int(player["score"])
+        alive = bool(player["alive"])
+        if score > self.last_score:
+            self._beep(900, 80)
+        if self.last_alive and not alive:
+            self._beep(220, 200)
+        if winner == self.username and self.last_winner != winner:
+            self._beep(1200, 160)
+        self.last_score = score
+        self.last_alive = alive
+        self.last_winner = winner
+
+    def _beep(self, frequency: int, duration: int) -> None:
+        if winsound is not None:
+            try:
+                winsound.Beep(frequency, duration)
+            except RuntimeError:
+                pass
 
     def _direction_parts(self, direction: object) -> tuple[int, int]:
         try:

@@ -9,6 +9,7 @@ from typing import Dict, Optional, Set
 
 from snake_network.server.auth import UserStore
 from snake_network.server.game import GameRoom
+from snake_network.server.stats import StatsStore
 from snake_network.shared.constants import PORT, SERVER_BIND_HOST, TICK_RATE
 from snake_network.shared.crypto import CryptoBox, build_shared_key, generate_private_key, public_key
 from snake_network.shared.protocol import ProtocolError, receive_packet, send_packet
@@ -16,21 +17,24 @@ from snake_network.shared.protocol import ProtocolError, receive_packet, send_pa
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 USERS_PATH = PROJECT_ROOT / "snake_network" / "data" / "users.json"
+STATS_PATH = PROJECT_ROOT / "snake_network" / "data" / "stats.json"
 
 
 class GameHub:
     """Owns all rooms and the mapping between clients and one active room."""
 
-    def __init__(self) -> None:
+    def __init__(self, stats: StatsStore) -> None:
         self.rooms: Dict[str, GameRoom] = {}
         self.room_clients: Dict[str, Set["ClientHandler"]] = {}
+        self.stats = stats
         self.lock = threading.RLock()
         self.create_room("Main Room")
 
-    def create_room(self, name: str) -> GameRoom:
+    def create_room(self, name: str, bot_count: int = 0, obstacle_count: int = 18) -> GameRoom:
         with self.lock:
             clean_name = (name or "Snake Room").strip()[:30]
             room = GameRoom(clean_name)
+            room.configure(bot_count, obstacle_count)
             self.rooms[room.room_id] = room
             self.room_clients[room.room_id] = set()
             return room
@@ -49,7 +53,7 @@ class GameHub:
             room = self.rooms[room_id]
             if room.winner is not None:
                 room.reset_game()
-            room.add_player(client.username)
+            room.add_player(client.username, client.preferred_color)
             self.room_clients[room_id].add(client)
             client.room_id = room_id
             return room
@@ -81,11 +85,58 @@ class GameHub:
             room.reset_game()
         return room
 
+    def set_ready(self, client: "ClientHandler", ready: bool) -> None:
+        room = self._client_room(client)
+        if room is not None and client.username is not None:
+            room.set_ready(client.username, ready)
+
+    def set_color(self, client: "ClientHandler", color: str) -> None:
+        client.preferred_color = color
+        room = self._client_room(client)
+        if room is not None and client.username is not None:
+            room.set_color(client.username, color)
+
+    def send_chat(self, client: "ClientHandler", text: str) -> None:
+        room = self._client_room(client)
+        if room is None or client.username is None:
+            return
+        message = {
+            "type": "chat_message",
+            "username": client.username,
+            "message": text[:160],
+        }
+        with self.lock:
+            clients = list(self.room_clients.get(room.room_id, set()))
+        for room_client in clients:
+            room_client.send(message)
+
+    def delete_room(self, room_id: str) -> None:
+        with self.lock:
+            if room_id not in self.rooms or len(self.rooms) == 1:
+                return
+            clients = list(self.room_clients.get(room_id, set()))
+            for client in clients:
+                client.room_id = None
+                client.send({"type": "left_room"})
+                client.send({"type": "room_list", "rooms": self.list_rooms()})
+            self.room_clients.pop(room_id, None)
+            self.rooms.pop(room_id, None)
+
     def tick_and_broadcast(self) -> None:
         with self.lock:
             rooms = list(self.rooms.values())
         for room in rooms:
             room.update()
+            if room.winner is not None and not room.match_recorded:
+                self.stats.record_match(
+                    room.name,
+                    room.winner,
+                    [
+                        {"username": player.username, "score": player.score}
+                        for player in room.players.values()
+                    ],
+                )
+                room.match_recorded = True
             snapshot = room.snapshot()
             with self.lock:
                 clients = list(self.room_clients.get(room.room_id, set()))
@@ -115,6 +166,7 @@ class ClientHandler(threading.Thread):
         self.crypto: Optional[CryptoBox] = None
         self.username: Optional[str] = None
         self.room_id: Optional[str] = None
+        self.preferred_color: Optional[str] = None
         self._send_lock = threading.Lock()
         self._running = True
 
@@ -142,6 +194,8 @@ class ClientHandler(threading.Thread):
         if not self._running:
             return
         self._running = False
+        if self.username is not None:
+            self.server.logout_user(self.username)
         self.server.hub.leave_room(self)
         try:
             self.conn.close()
@@ -171,7 +225,11 @@ class ClientHandler(threading.Thread):
         if command == "list_rooms":
             self.send({"type": "room_list", "rooms": self.server.hub.list_rooms()})
         elif command == "create_room":
-            room = self.server.hub.create_room(str(message.get("name", "Snake Room")))
+            room = self.server.hub.create_room(
+                str(message.get("name", "Snake Room")),
+                int(message.get("bot_count", 0)),
+                int(message.get("obstacle_count", 18)),
+            )
             self.send({"type": "room_created", "room": room.info()})
             self.send({"type": "room_list", "rooms": self.server.hub.list_rooms()})
         elif command == "join_room":
@@ -189,6 +247,20 @@ class ClientHandler(threading.Thread):
             room = self.server.hub.restart_room(self)
             if room is not None:
                 self.send(room.snapshot())
+        elif command == "ready":
+            self.server.hub.set_ready(self, bool(message.get("ready", True)))
+        elif command == "set_color":
+            self.server.hub.set_color(self, str(message.get("color", "")))
+        elif command == "chat":
+            self.server.hub.send_chat(self, str(message.get("message", "")))
+        elif command == "stats":
+            self.send(self.server.stats.snapshot())
+        elif command == "delete_room":
+            if self.username and self.username.lower() == "admin":
+                self.server.hub.delete_room(str(message.get("room_id", "")))
+                self.send({"type": "room_list", "rooms": self.server.hub.list_rooms()})
+            else:
+                self.send({"type": "error", "message": "רק מנהל יכול למחוק חדרים"})
         else:
             self.send({"type": "error", "message": "פקודה לא מוכרת"})
 
@@ -196,12 +268,15 @@ class ClientHandler(threading.Thread):
         username = str(message.get("username", "")).strip()
         password = str(message.get("password", ""))
         try:
+            if self.server.is_user_online(username):
+                raise ValueError("המשתמש כבר מחובר ממחשב אחר")
             if command == "register":
                 self.server.users.register(username, password)
                 logged_in_username = self.server.users.login(username, password)
             else:
                 logged_in_username = self.server.users.login(username, password)
             self.username = logged_in_username
+            self.server.mark_user_online(logged_in_username)
             self.send({"type": "auth_result", "ok": True, "username": logged_in_username})
             self.send({"type": "room_list", "rooms": self.server.hub.list_rooms()})
         except ValueError as error:
@@ -213,8 +288,23 @@ class SnakeServer:
         self.host = host
         self.port = port
         self.users = UserStore(USERS_PATH)
-        self.hub = GameHub()
+        self.stats = StatsStore(STATS_PATH)
+        self.hub = GameHub(self.stats)
+        self._active_users: Set[str] = set()
+        self._active_lock = threading.Lock()
         self._running = True
+
+    def is_user_online(self, username: str) -> bool:
+        with self._active_lock:
+            return username.lower() in self._active_users
+
+    def mark_user_online(self, username: str) -> None:
+        with self._active_lock:
+            self._active_users.add(username.lower())
+
+    def logout_user(self, username: str) -> None:
+        with self._active_lock:
+            self._active_users.discard(username.lower())
 
     def start(self) -> None:
         threading.Thread(target=self._game_loop, daemon=True).start()

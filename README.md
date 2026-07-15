@@ -68,3 +68,4 @@ If Windows Firewall asks for permission, allow Python on private networks.
 - Tkinter interactive GUI.
 - Multiple games in parallel, each with multiple snakes.
 - Server-authoritative game logic for collisions, fruits, scoring, bullets, and winners.
+- Ready countdown, chat, bots, obstacles, special fruits, sounds, high scores, match history, snake colors, and admin room deletion.
