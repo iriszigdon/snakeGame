@@ -225,6 +225,7 @@ class SnakeServer:
             print(f"Snake server listening on {self.host}:{self.port}")
             while self._running:
                 conn, address = server_socket.accept()
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 ClientHandler(self, conn, address).start()
 
     def _game_loop(self) -> None:

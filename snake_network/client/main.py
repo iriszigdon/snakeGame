@@ -23,6 +23,7 @@ class NetworkClient:
 
     def connect(self, host: str = DEFAULT_SERVER_HOST, port: int = PORT) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.connect((host, port))
         private = generate_private_key()
         send_packet(self.sock, {"type": "key_init", "public_key": str(public_key(private))})
@@ -73,6 +74,7 @@ class SnakeClientApp:
         self.server_host = server_host
         self.server_port = server_port
         self.ready = False
+        self.in_game = False
         self.username = ""
         self.current_state: Optional[dict[str, object]] = None
 
@@ -145,6 +147,7 @@ class SnakeClientApp:
         })
 
     def _show_lobby(self, rooms: list[dict[str, object]]) -> None:
+        self.in_game = False
         self._clear()
         top = ttk.Frame(self.container, style="Panel.TFrame")
         top.pack(fill="x", pady=(0, 16))
@@ -183,6 +186,7 @@ class SnakeClientApp:
         self.network.send({"type": "join_room", "room_id": self.room_ids[selection[0]]})
 
     def _show_game(self) -> None:
+        self.in_game = True
         self._clear()
         top = ttk.Frame(self.container, style="Panel.TFrame")
         top.pack(fill="x")
@@ -227,9 +231,15 @@ class SnakeClientApp:
         self.network.send({"type": "direction", "dx": dx, "dy": dy})
 
     def _process_messages(self) -> None:
+        latest_game_state = None
         while not self.messages.empty():
             message = self.messages.get()
-            self._handle_message(message)
+            if message.get("type") == "game_state":
+                latest_game_state = message
+            else:
+                self._handle_message(message)
+        if latest_game_state is not None and self.in_game:
+            self._handle_message(latest_game_state)
         self.root.after(40, self._process_messages)
 
     def _handle_message(self, message: dict[str, object]) -> None:
@@ -255,7 +265,7 @@ class SnakeClientApp:
             messagebox.showwarning("Disconnected", "The server connection was closed.")
 
     def _draw_game(self, state: dict[str, object]) -> None:
-        if not hasattr(self, "canvas"):
+        if not self.in_game or not hasattr(self, "canvas") or not self.canvas.winfo_exists():
             return
         width = int(state["width"])
         height = int(state["height"])
