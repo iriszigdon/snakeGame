@@ -83,7 +83,7 @@ class GameRoom:
     match_recorded: bool = False
     bot_count: int = DEFAULT_BOT_COUNT
     obstacle_count: int = DEFAULT_OBSTACLE_COUNT
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    lock: threading.RLock = field(default_factory=threading.RLock)
 
     def add_player(self, username: str, color: Optional[str] = None) -> Player:
         with self.lock:
