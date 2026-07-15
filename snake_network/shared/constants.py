@@ -6,7 +6,7 @@ BOARD_WIDTH = 40
 BOARD_HEIGHT = 30
 CELL_SIZE = 20
 
-TICK_RATE = 8
+TICK_RATE = 5
 FRUIT_COUNT = 6
 MIN_PLAYERS_TO_START = 1
 
@@ -27,4 +27,12 @@ COLORS = [
     "#FFAB40",
     "#69F0AE",
     "#B388FF",
+]
+
+FRUIT_TYPES = [
+    {"kind": "apple", "color": "#EF4444"},
+    {"kind": "orange", "color": "#F97316"},
+    {"kind": "grape", "color": "#8B5CF6"},
+    {"kind": "lemon", "color": "#FACC15"},
+    {"kind": "melon", "color": "#22C55E"},
 ]

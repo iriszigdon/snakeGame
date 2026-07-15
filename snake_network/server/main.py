@@ -47,6 +47,8 @@ class GameHub:
                 raise ValueError("החדר לא קיים")
             self.leave_room(client)
             room = self.rooms[room_id]
+            if room.winner is not None:
+                room.reset_game()
             room.add_player(client.username)
             self.room_clients[room_id].add(client)
             client.room_id = room_id
@@ -72,6 +74,12 @@ class GameHub:
         room = self._client_room(client)
         if room is not None and client.username is not None:
             room.shoot(client.username)
+
+    def restart_room(self, client: "ClientHandler") -> Optional[GameRoom]:
+        room = self._client_room(client)
+        if room is not None:
+            room.reset_game()
+        return room
 
     def tick_and_broadcast(self) -> None:
         with self.lock:
@@ -172,10 +180,15 @@ class ClientHandler(threading.Thread):
         elif command == "leave_room":
             self.server.hub.leave_room(self)
             self.send({"type": "left_room"})
+            self.send({"type": "room_list", "rooms": self.server.hub.list_rooms()})
         elif command == "direction":
             self.server.hub.handle_direction(self, int(message.get("dx", 0)), int(message.get("dy", 0)))
         elif command == "shoot":
             self.server.hub.handle_shoot(self)
+        elif command == "restart_room":
+            room = self.server.hub.restart_room(self)
+            if room is not None:
+                self.send(room.snapshot())
         else:
             self.send({"type": "error", "message": "פקודה לא מוכרת"})
 

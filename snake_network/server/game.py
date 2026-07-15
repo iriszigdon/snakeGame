@@ -12,6 +12,7 @@ from snake_network.shared.constants import (
     BULLET_MAX_AGE,
     COLORS,
     FRUIT_COUNT,
+    FRUIT_TYPES,
     MIN_PLAYERS_TO_START,
     SHOOT_SCORE,
     SHOT_COOLDOWN_TICKS,
@@ -31,12 +32,19 @@ class Bullet:
 
 
 @dataclass
+class Fruit:
+    position: Point
+    kind: str
+    color: str
+
+
+@dataclass
 class Player:
     username: str
     color: str
     snake: List[Point]
-    direction: Direction = (1, 0)
-    next_direction: Direction = (1, 0)
+    direction: Direction = (0, 0)
+    next_direction: Direction = (0, 0)
     score: int = 0
     alive: bool = True
     last_shot_tick: int = -999
@@ -58,7 +66,7 @@ class GameRoom:
     width: int = BOARD_WIDTH
     height: int = BOARD_HEIGHT
     players: Dict[str, Player] = field(default_factory=dict)
-    fruits: List[Point] = field(default_factory=list)
+    fruits: List[Fruit] = field(default_factory=list)
     bullets: List[Bullet] = field(default_factory=list)
     tick_number: int = 0
     winner: Optional[str] = None
@@ -72,7 +80,6 @@ class GameRoom:
             snake = self._create_spawn_snake()
             player = Player(username=username, color=color, snake=snake)
             self.players[username] = player
-            self.winner = None
             self._fill_fruits()
             return player
 
@@ -83,6 +90,23 @@ class GameRoom:
             if len(self.players) == 0:
                 self.winner = None
 
+    def reset_game(self) -> None:
+        with self.lock:
+            self.fruits = []
+            self.bullets = []
+            self.tick_number = 0
+            self.winner = None
+            for index, player in enumerate(self.players.values()):
+                player.snake = self._create_spawn_snake()
+                player.direction = (0, 0)
+                player.next_direction = (0, 0)
+                player.score = 0
+                player.alive = True
+                player.last_shot_tick = -999
+                player.death_reason = ""
+                player.color = COLORS[index % len(COLORS)]
+            self._fill_fruits()
+
     def set_direction(self, username: str, direction: Direction) -> None:
         with self.lock:
             player = self.players.get(username)
@@ -90,7 +114,10 @@ class GameRoom:
                 return
             if direction == (0, 0):
                 return
-            if (direction[0] + player.direction[0], direction[1] + player.direction[1]) == (0, 0):
+            if player.direction != (0, 0) and (
+                direction[0] + player.direction[0],
+                direction[1] + player.direction[1],
+            ) == (0, 0):
                 return
             player.next_direction = direction
 
@@ -115,16 +142,21 @@ class GameRoom:
                 return
 
             occupied_before = self._occupied_points()
+            moved_players = set()
             for player in self.players.values():
                 if not player.alive:
                     continue
                 player.direction = player.next_direction
+                if player.direction == (0, 0):
+                    continue
+                moved_players.add(player.username)
                 dx, dy = player.direction
                 new_head = (player.head[0] + dx, player.head[1] + dy)
                 player.snake.insert(0, new_head)
 
-                if new_head in self.fruits:
-                    self.fruits.remove(new_head)
+                fruit = self._fruit_at(new_head)
+                if fruit is not None:
+                    self.fruits.remove(fruit)
                     player.score += 1
                 else:
                     player.snake.pop()
@@ -136,6 +168,8 @@ class GameRoom:
 
             for player in self.players.values():
                 if not player.alive:
+                    continue
+                if player.username not in moved_players:
                     continue
                 if self._is_wall_collision(player.head):
                     self._kill(player, "פגיעה בקיר")
@@ -164,6 +198,7 @@ class GameRoom:
                         "username": player.username,
                         "color": player.color,
                         "snake": player.snake,
+                        "direction": player.direction,
                         "score": player.score,
                         "alive": player.alive,
                         "can_shoot": player.can_shoot,
@@ -171,7 +206,10 @@ class GameRoom:
                     }
                     for player in self.players.values()
                 ],
-                "fruits": self.fruits,
+                "fruits": [
+                    {"position": fruit.position, "kind": fruit.kind, "color": fruit.color}
+                    for fruit in self.fruits
+                ],
                 "bullets": [
                     {"owner": bullet.owner, "position": bullet.position}
                     for bullet in self.bullets
@@ -199,12 +237,19 @@ class GameRoom:
         return [(3, 3), (2, 3), (1, 3)]
 
     def _fill_fruits(self) -> None:
-        occupied = self._occupied_points() | set(self.fruits)
+        occupied = self._occupied_points() | {fruit.position for fruit in self.fruits}
         while len(self.fruits) < FRUIT_COUNT:
             point = (random.randint(0, self.width - 1), random.randint(0, self.height - 1))
             if point not in occupied:
-                self.fruits.append(point)
+                fruit_type = random.choice(FRUIT_TYPES)
+                self.fruits.append(Fruit(point, str(fruit_type["kind"]), str(fruit_type["color"])))
                 occupied.add(point)
+
+    def _fruit_at(self, point: Point) -> Optional[Fruit]:
+        for fruit in self.fruits:
+            if fruit.position == point:
+                return fruit
+        return None
 
     def _occupied_points(self) -> set[Point]:
         points: set[Point] = set()

@@ -184,10 +184,20 @@ class SnakeClientApp:
 
     def _show_game(self) -> None:
         self._clear()
-        self.game_title = ttk.Label(self.container, text="Game", style="Title.TLabel")
-        self.game_title.pack(anchor="w")
+        top = ttk.Frame(self.container, style="Panel.TFrame")
+        top.pack(fill="x")
+        self.game_title = ttk.Label(top, text="Game", style="Title.TLabel")
+        self.game_title.pack(side="left", anchor="w")
+        ttk.Button(top, text="Back To Rooms", command=lambda: self.network.send({"type": "leave_room"})).pack(
+            side="right",
+            padx=4,
+        )
+        ttk.Button(top, text="New Game In Room", command=lambda: self.network.send({"type": "restart_room"})).pack(
+            side="right",
+            padx=4,
+        )
 
-        self.info_label = ttk.Label(self.container, text="Arrow keys/WASD to move, Space to shoot")
+        self.info_label = ttk.Label(self.container, text="Press an arrow key or WASD to start. Space shoots later.")
         self.info_label.pack(anchor="w", pady=(0, 8))
 
         self.canvas = tk.Canvas(
@@ -258,7 +268,7 @@ class SnakeClientApp:
             self.canvas.create_line(0, y * CELL_SIZE, width * CELL_SIZE, y * CELL_SIZE, fill="#111827")
 
         for fruit in state.get("fruits", []):
-            self._cell(fruit, "#F97316", oval=True)
+            self._draw_fruit(fruit)
         for bullet in state.get("bullets", []):
             self._cell(bullet["position"], "#F8FAFC", oval=True, inset=6)
 
@@ -267,7 +277,10 @@ class SnakeClientApp:
             color = str(player["color"])
             snake = player["snake"]
             for index, point in enumerate(snake):
-                self._cell(point, "#FFFFFF" if index == 0 else color, inset=2 if index == 0 else 1)
+                if index == 0:
+                    self._draw_snake_head(point, color, player.get("direction", [1, 0]))
+                else:
+                    self._cell(point, color, inset=1)
             status = "ALIVE" if player["alive"] else f'DEAD ({player["death_reason"]})'
             weapon = " | can shoot" if player["can_shoot"] else ""
             score_lines.append(f'{player["username"]}: {player["score"]} | {status}{weapon}')
@@ -276,7 +289,7 @@ class SnakeClientApp:
         room = state.get("room", {})
         self.game_title.config(text=f'Room: {room.get("name", "")}')
         if winner:
-            self.info_label.config(text=f"Winner: {winner}")
+            self.info_label.config(text=f"Winner: {winner}. You can start a new game or go back to the rooms.")
         else:
             self.info_label.config(text=f"Reach {state.get('shoot_score')} points to unlock shooting. Space = shoot.")
         self.score_box.delete("1.0", tk.END)
@@ -292,6 +305,74 @@ class SnakeClientApp:
             self.canvas.create_oval(x1, y1, x2, y2, fill=color, outline="")
         else:
             self.canvas.create_rectangle(x1, y1, x2, y2, fill=color, outline="")
+
+    def _draw_snake_head(self, point: object, color: str, direction: object) -> None:
+        x, y = point
+        x1 = int(x) * CELL_SIZE + 1
+        y1 = int(y) * CELL_SIZE + 1
+        x2 = (int(x) + 1) * CELL_SIZE - 1
+        y2 = (int(y) + 1) * CELL_SIZE - 1
+        self.canvas.create_oval(x1, y1, x2, y2, fill=color, outline="#ECFEFF", width=2)
+
+        dx, dy = self._direction_parts(direction)
+        if (dx, dy) == (0, 0):
+            dx = 1
+        center_x = (x1 + x2) // 2
+        center_y = (y1 + y2) // 2
+        eye_offset = 5
+        forward = 4
+
+        if dx != 0:
+            eye_x = center_x + dx * forward
+            eye_y1 = center_y - eye_offset
+            eye_y2 = center_y + eye_offset
+            tongue_start = (center_x + dx * 8, center_y)
+            tongue_end = (center_x + dx * 14, center_y)
+            self._eye(eye_x, eye_y1)
+            self._eye(eye_x, eye_y2)
+        else:
+            eye_y = center_y + dy * forward
+            eye_x1 = center_x - eye_offset
+            eye_x2 = center_x + eye_offset
+            tongue_start = (center_x, center_y + dy * 8)
+            tongue_end = (center_x, center_y + dy * 14)
+            self._eye(eye_x1, eye_y)
+            self._eye(eye_x2, eye_y)
+
+        self.canvas.create_line(*tongue_start, *tongue_end, fill="#F43F5E", width=2)
+
+    def _draw_fruit(self, fruit: object) -> None:
+        position = fruit.get("position", [0, 0])
+        kind = str(fruit.get("kind", "apple"))
+        color = str(fruit.get("color", "#F97316"))
+        x, y = position
+        x1 = int(x) * CELL_SIZE + 3
+        y1 = int(y) * CELL_SIZE + 3
+        x2 = (int(x) + 1) * CELL_SIZE - 3
+        y2 = (int(y) + 1) * CELL_SIZE - 3
+
+        if kind == "grape":
+            self.canvas.create_oval(x1, y1, x1 + 8, y1 + 8, fill=color, outline="")
+            self.canvas.create_oval(x1 + 7, y1, x1 + 15, y1 + 8, fill=color, outline="")
+            self.canvas.create_oval(x1 + 4, y1 + 7, x1 + 12, y1 + 15, fill=color, outline="")
+        elif kind == "lemon":
+            self.canvas.create_oval(x1, y1 + 2, x2, y2 - 2, fill=color, outline="#FEF08A", width=2)
+        elif kind == "melon":
+            self.canvas.create_oval(x1, y1, x2, y2, fill=color, outline="#BBF7D0", width=2)
+            self.canvas.create_line(x1 + 5, y1 + 2, x2 - 5, y2 - 2, fill="#166534", width=2)
+        else:
+            self.canvas.create_oval(x1, y1, x2, y2, fill=color, outline="")
+            self.canvas.create_rectangle((x1 + x2) // 2 - 1, y1 - 2, (x1 + x2) // 2 + 1, y1 + 4, fill="#78350F", outline="")
+        self.canvas.create_oval(x2 - 5, y1 - 2, x2 + 1, y1 + 4, fill="#22C55E", outline="")
+
+    def _eye(self, x: int, y: int) -> None:
+        self.canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill="#020617", outline="")
+
+    def _direction_parts(self, direction: object) -> tuple[int, int]:
+        try:
+            return int(direction[0]), int(direction[1])
+        except (TypeError, ValueError, IndexError):
+            return 1, 0
 
     def _on_close(self) -> None:
         self.network.close()
