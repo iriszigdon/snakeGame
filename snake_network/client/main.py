@@ -70,6 +70,7 @@ class SnakeClientApp:
         self.network = NetworkClient(self.messages)
         self.server_host = server_host
         self.server_port = server_port
+        self.ready = False
         self.username = ""
         self.current_state: Optional[dict[str, object]] = None
 
@@ -83,14 +84,17 @@ class SnakeClientApp:
         self.container = ttk.Frame(self.root, style="Panel.TFrame")
         self.container.pack(fill="both", expand=True, padx=24, pady=24)
 
-        self._connect_to_server()
+        if not self._connect_to_server():
+            return
+        self.ready = True
         self._show_login()
         self.root.after(40, self._process_messages)
 
     def run(self) -> None:
-        self.root.mainloop()
+        if self.ready:
+            self.root.mainloop()
 
-    def _connect_to_server(self) -> None:
+    def _connect_to_server(self) -> bool:
         if self.server_host == "":
             chosen_host = simpledialog.askstring(
                 "Server Address",
@@ -101,12 +105,14 @@ class SnakeClientApp:
             self.server_host = (chosen_host or DEFAULT_SERVER_HOST).strip()
         try:
             self.network.connect(self.server_host, self.server_port)
-        except OSError as error:
+            return True
+        except (OSError, ConnectionError, ValueError) as error:
             messagebox.showerror(
                 "Connection Error",
                 f"Cannot connect to server {self.server_host}:{self.server_port}\n{error}",
             )
             self.root.destroy()
+            return False
 
     def _clear(self) -> None:
         for widget in self.container.winfo_children():

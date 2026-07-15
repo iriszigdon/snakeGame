@@ -3,6 +3,21 @@ setlocal
 
 cd /d "%~dp0"
 
+if not exist "snake_network\client\main.py" (
+    echo Cannot find the project files.
+    echo.
+    echo This launcher must be inside the full project folder, next to:
+    echo   snake_network\client\main.py
+    echo.
+    echo Do not copy only run_client.bat to another computer.
+    echo Copy the whole snake project folder, then run this file from there.
+    echo.
+    pause
+    exit /b 1
+)
+
+set "PYTHONPATH=%CD%"
+
 set "SERVER_HOST=%~1"
 if "%SERVER_HOST%"=="" (
     set /p SERVER_HOST=Enter server IP [127.0.0.1]: 
